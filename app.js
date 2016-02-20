@@ -2,35 +2,34 @@ var async = require('async');
 var MongoClient = require('mongodb').MongoClient;
 console.dir('_______________________________________________/');
 
-MongoClient.connect('mongodb://__IP__/reports', function (err, db) {
+MongoClient.connect('mongodb://__SomeDB_IP__:27017/reports', function (err, db) {
     if (err) throw err;
 
-    var start = 1446328800, end = 1451599199, next = 0;
+    var startPeriod = 1446328800,
+        endPeriod = 1451599199,
+        startDay = startPeriod,
+        endDay = 0,
+        addOffsetOneDay,
+        getStatistic,
+        query = [],
+        writeToCSV,
+        tasks;
 
-    var addOffsetOneDay = function (timestamp) {
+    addOffsetOneDay = function (timestamp) {
         return timestamp + 86400;
     };
 
-    var getStatistic = function (start, end, callback) {
-        db.collection('cardEnds').aggregate([
-            {$match: {'t': {$gt: start, $lte: end}}},
-            {$limit: 100},
-            {$group: {_id: '$u', cards: {$sum: 1}}},
-            {$group: {_id: null, cards: {$avg: '$cards'}}}
-        ]).toArray(function (err, result) {
-
+    getStatistic = function (start, end, query, callback) {
+        db.collection('cardEnds').aggregate(query).toArray(function (err, result) {
             if (err) throw err;
-
             callback(null, result);
-
         });
     };
 
-    var writeToCSV = function (data) {
+    writeToCSV = function (data) {
         var fs = require('fs');
         var csv = require('csv-write-stream');
-        //var writer = csv({sendHeaders: false});
-        var writer = csv({ headers: ["_id", "cards"]});
+        var writer = csv({headers: ["_id", "cards"]});
         writer.pipe(fs.createWriteStream('out.csv'));
         data.forEach(function (item) {
             writer.write(item[0]);
@@ -39,22 +38,37 @@ MongoClient.connect('mongodb://__IP__/reports', function (err, db) {
         writer.end();
     };
 
-    var tasks = [];
-    while (start < end) {
-        next = addOffsetOneDay(start);
-        tasks.push(function (s, e) {
+
+    // RUN
+    tasks = [];
+    query[5] = [
+        {
+            $match: {
+                't': {$gt: start, $lte: end},
+                'p.state': {$nin: ['skipped', 'exit', 'forceExit']}
+            }
+        },
+        {$group: {_id: '$u', cards: {$sum: 1}}},
+        {$group: {_id: null, cards: {$avg: '$cards'}}}
+    ];
+    query[6] = [];
+
+    while (endDay < endPeriod) {
+        endDay = addOffsetOneDay(startDay);
+        tasks.push(function (s, e, q) {
             return function (callback) {
                 getStatistic(
                     s,
                     e,
+                    q,
                     callback
                 );
             }
-        }(start, end));
-        start = addOffsetOneDay(start);
+        }(startDay, endDay, query[5]));
+        startDay = addOffsetOneDay(startDay);
+        console.log('.');
     }
 
-    // RUN
     async.parallel(tasks, function (err, results) {
         if (err) throw err;
         db.close();
@@ -65,6 +79,3 @@ MongoClient.connect('mongodb://__IP__/reports', function (err, db) {
 
 
 });
-
-
-
